@@ -25,6 +25,8 @@ import type { SourceConfig } from '@/lib/types';
 import { useToast } from './toast';
 import { formatRelativeTime, hostnameOf, validateSourceUrl, cn } from '@/lib/utils';
 import { exportConfig, importConfig } from '@/lib/db';
+import { applySnapshot, buildSnapshot, readLastSync, recordLastSync } from '@/lib/cloud-sync';
+import { parseSnapshot, summarizeSnapshot, type SyncSnapshot } from '@/lib/cloud-sync-format';
 import { PERSIST_KEY } from '@/lib/persist-storage';
 import { copyToClipboard } from '@/lib/clipboard';
 import { useAuth } from './auth';
@@ -59,7 +61,7 @@ const SECONDARY_TABS: Record<PrimaryTab, { id: SecondaryTab; label: string }[]> 
     { id: 'image', label: '封面图加载' },
     { id: 'home', label: '首页与内容' },
   ],
-  data: [{ id: 'io', label: '配置导入导出' }],
+  data: [{ id: 'io', label: '云同步与导入导出' }],
 };
 
 const TAB_STORAGE_KEY = 'libretv-settings-tab';
@@ -138,7 +140,12 @@ export function SourceManagerDrawer({ open, onClose }: { open: boolean; onClose:
       {current === 'image' && <ImagePanel />}
       {current === 'home' && <HomePanel />}
       {current === 'subs' && <SourceSubscriptions />}
-      {current === 'io' && <ConfigIoPanel />}
+      {current === 'io' && (
+        <div className="space-y-6">
+          <CloudSyncPanel />
+          <ConfigIoPanel />
+        </div>
+      )}
     </Drawer>
   );
 }
@@ -1160,6 +1167,129 @@ function SourceSubscriptions() {
           setPendingDelete(null);
           toast('订阅已删除', 'success');
         }}
+      />
+    </section>
+  );
+}
+
+/**
+ * 云同步：把本机的源、设置与观看历史存到部署者配置的 Cloudflare KV，
+ * 在其他设备上一键恢复。上传和恢复都是重操作，先确认再执行。
+ */
+function CloudSyncPanel() {
+  const { toast } = useToast();
+  const { verified, openLogin } = useAuth();
+  const [busy, setBusy] = useState<'up' | 'down' | null>(null);
+  const [confirmUpload, setConfirmUpload] = useState(false);
+  const [pending, setPending] = useState<{ snapshot: SyncSnapshot; summary: string } | null>(null);
+  const [lastSync, setLastSync] = useState<ReturnType<typeof readLastSync>>(null);
+
+  useEffect(() => {
+    setLastSync(readLastSync());
+  }, []);
+
+  const requireLogin = () => {
+    if (verified === false) {
+      openLogin();
+      return true;
+    }
+    return false;
+  };
+
+  const upload = async () => {
+    setConfirmUpload(false);
+    setBusy('up');
+    try {
+      await api.syncPut(await buildSnapshot());
+      recordLastSync('up');
+      setLastSync(readLastSync());
+      toast('已上传到云端', 'success');
+    } catch (err) {
+      toast(err instanceof Error ? err.message : '上传失败', 'error');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const fetchRemote = async () => {
+    if (requireLogin()) return;
+    setBusy('down');
+    try {
+      const { snapshot } = await api.syncGet();
+      if (snapshot === null) {
+        toast('云端还没有数据，请先在另一台设备上点「上传到云端」', 'info');
+        return;
+      }
+      const parsed = parseSnapshot(snapshot);
+      if (!parsed) {
+        toast('云端数据格式不受支持，请在原设备重新上传', 'error');
+        return;
+      }
+      setPending({ snapshot: parsed, summary: summarizeSnapshot(parsed) });
+    } catch (err) {
+      toast(err instanceof Error ? err.message : '读取云端数据失败', 'error');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const confirmRestore = async () => {
+    if (!pending) return;
+    try {
+      await applySnapshot(pending.snapshot);
+      recordLastSync('down');
+      setPending(null);
+      toast('已从云端恢复，即将刷新页面', 'success');
+      setTimeout(() => window.location.reload(), 1200);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : '恢复失败', 'error');
+    }
+  };
+
+  return (
+    <section>
+      <SectionTitle title="云同步" hint="把数据源、订阅、收藏与观看历史保存到服务器，在其他设备上恢复" />
+      <div className="flex gap-2">
+        <button
+          className="btn-ghost flex-1 text-xs"
+          disabled={busy !== null}
+          onClick={() => {
+            if (!requireLogin()) setConfirmUpload(true);
+          }}
+        >
+          {busy === 'up' ? '上传中…' : '上传到云端'}
+        </button>
+        <button className="btn-ghost flex-1 text-xs" disabled={busy !== null} onClick={() => void fetchRemote()}>
+          {busy === 'down' ? '读取中…' : '从云端恢复'}
+        </button>
+      </div>
+      {lastSync && (
+        <p className="mt-2 text-xs text-faint">
+          本机上次{lastSync.direction === 'up' ? '上传' : '恢复'}：{formatRelativeTime(lastSync.at)}
+        </p>
+      )}
+
+      <ConfirmDialog
+        open={confirmUpload}
+        title="用本机数据覆盖云端？"
+        message="云端只保存一份数据，上传会替换之前任何设备上传的内容。"
+        confirmLabel="上传并覆盖"
+        onCancel={() => setConfirmUpload(false)}
+        onConfirm={() => void upload()}
+      />
+      <ConfirmDialog
+        open={pending !== null}
+        danger
+        title="从云端恢复？"
+        message={
+          pending
+            ? `云端数据上传于 ${new Date(pending.snapshot.updatedAt).toLocaleString()}，包含 ${pending.summary}。` +
+              '本机的数据源、订阅、收藏与偏好设置会被云端覆盖；观看历史会合并，保留较新的记录。恢复后将刷新页面。'
+            : undefined
+        }
+        confirmLabel="恢复"
+        onCancel={() => setPending(null)}
+        onConfirm={confirmRestore}
       />
     </section>
   );

@@ -108,6 +108,17 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 export const api = {
   status: () => request<AuthStatusResponse>('/api/status'),
 
+  /** 云同步：读取云端快照（未上传过时 snapshot 为 null） */
+  syncGet: () => request<{ snapshot: unknown }>('/api/sync', { cache: 'no-store' }),
+
+  /** 云同步：用本机快照覆盖云端 */
+  syncPut: (snapshot: unknown) =>
+    request<{ ok: boolean; updatedAt: number }>('/api/sync', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(snapshot),
+    }),
+
   login: (password: string) =>
     request<{ success: boolean }>('/api/auth', {
       method: 'POST',

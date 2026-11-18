@@ -120,6 +120,9 @@ PASSWORD=your-password npm start   # 监听 8080
 | `DEFAULT_SUBSCRIPTIONS` | 否 | 预置数据源订阅（LibreTV-SourceList JSON 链接，也接受 TVBOX 配置与接口目录地址），JSON 数组：`["https://.../sources.json", {"url":"https://.../list.json","name":"名称","refreshDays":10}]`。首次访问自动导入点播源与直播源，之后按 `refreshDays`（1-365，缺省 1 天）静默刷新；用户删除后不再自动加回。`refreshDays` 只是初始值，用户在源管理面板改过之后以面板设置为准 |
 | `DEFAULT_RECOMMEND_SOURCE` | 否 | 首页推荐数据源的默认值（`douban` / `bangumi` / `hot-list`，出厂默认 `hot-list`）；仅对未在设置中主动选择过的用户生效，用户的选择始终优先 |
 | `LIVE_ALLOW_PRIVATE` | 否 | 设为 `1` 时允许直播流代理访问内网/保留地址（自建 IPTV 场景），默认关闭以维持 SSRF 防护 |
+| `SYNC_CF_ACCOUNT_ID` | 否 | 云同步：Cloudflare 账户 ID。与下面两项同时配置才启用云同步，见[云同步](#云同步) |
+| `SYNC_CF_KV_NAMESPACE_ID` | 否 | 云同步：存放同步数据的 Cloudflare KV 命名空间 ID |
+| `SYNC_CF_API_TOKEN` | 否 | 云同步：只授予 `Workers KV Storage: Edit` 权限的 Cloudflare API Token（请设为机密变量） |
 
 ## 使用说明
 
@@ -128,6 +131,29 @@ PASSWORD=your-password npm start   # 监听 8080
 3. **播放**：详情弹窗选择剧集进入 `/watch`；支持快捷键（空格/←→/↑↓/F/Alt+←→）、移动端长按 3 倍速、自动连播、换源测速。观看/暂停时后续分片自动缓存到本地（设置可关），播放页可「下载本集」（TS/MP4）离线观看。播放页「跳过标记」可标记片头/中段/片尾区间（快捷键 Shift+I 片头结束、Shift+O 片尾开始、Shift+S·Shift+E 中段区间），之后同剧各集与同名资源自动跳过——片头/中段跳到片段末尾，片尾则直接结束本集（是否连播下一集由自动连播决定），三类片段共用「自动跳过片段」一个开关；跳过时提示条带「撤销」，「跳过标记」侧栏可逐剧关闭、微调边界、试跳起点/终点（记录与试跳都会先暂停），命中区间在进度条上着色。侧栏是非模态的：不遮画面、不挡播放器点击，可以一边看一边标。
 4. **进度与历史**：自动保存在本设备 IndexedDB，仅定位信息入库，播放时自动同步最新剧集。
 5. **配置迁移**：设置 → 数据 → 配置导入导出（兼容旧版 LibreTV-Settings JSON 的历史记录迁移）。
+6. **云同步**：设置 → 数据 → 云同步，「上传到云端」/「从云端恢复」，在多台设备间同步数据源、订阅、收藏与观看历史（需部署者先完成下方配置）。
+
+### 云同步
+
+数据默认只存在当前浏览器里。配置云同步后，可以把它们存到 Cloudflare KV（免费额度：每天 10 万次读、1000 次写），再在其他设备上恢复。Docker / Node / Cloudflare Workers 部署都适用。
+
+**部署者一次性配置：**
+
+1. **创建 KV 命名空间**：Cloudflare 控制台 → Storage & Databases → Workers KV → Create，名称随意（如 `libretv-sync`），记下 **Namespace ID**。
+2. **记下账户 ID**：控制台首页右侧 Account details 里的 **Account ID**。
+3. **创建 API Token**：右上角头像 → My Profile → API Tokens → Create Token → Create Custom Token，权限选 `Account` · `Workers KV Storage` · `Edit`，Account Resources 选你的账户，创建后复制 Token（只显示一次）。
+4. **填入环境变量**：`SYNC_CF_ACCOUNT_ID`、`SYNC_CF_KV_NAMESPACE_ID`、`SYNC_CF_API_TOKEN`（Token 建议设为机密/Secret），然后重新部署。
+
+**使用：**
+
+- 在已配好源的设备上：设置 → 数据 → 云同步 → **上传到云端**；
+- 在其他设备上：登录后同一位置点 **从云端恢复**，确认后页面自动刷新。
+
+**规则：**
+
+- 云端只保存一份数据，每次上传整体覆盖；
+- 恢复时，数据源、订阅、收藏与偏好设置以云端为准覆盖本机；观看历史和逐集进度合并，同一条目保留较新的记录；
+- 读写都需要登录（`PASSWORD`），同步内容包含你的源地址与观看记录，请使用足够强的密码。
 
 ## 直播 / IPTV
 

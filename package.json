@@ -6,6 +6,7 @@
   "license": "AGPL-3.0-or-later",
   "scripts": {
     "dev": "next dev -p 8080",
+    "prebuild": "node scripts/check-utf8.mjs",
     "build": "next build",
     "start": "next start -p 8080",
     "lint": "eslint src",
